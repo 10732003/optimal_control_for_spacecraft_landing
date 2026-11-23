@@ -144,11 +144,12 @@ class LanderSOCP:
                 cons += [err <= x_tol]
             obj = fuel
         elif mode == "error":
-            # TODO (Question 3.2): the objective `obj`, the landing error `err`
-            raise NotImplementedError("Question 3.2")
+            # Stage 1 (Question 3.2): minimize the horizontal miss distance |x_N - x_target|
+            obj = err
         elif mode == "fuel_with_error_bound":
-            # TODO (Question 3.2): the objective `obj` (the fuel) and the bound `err` <= `self.dmax` (append it to `cons`)
-            raise NotImplementedError("Question 3.2")
+            # Stage 2 (Question 3.2): minimum fuel with the relaxed landing tolerance |x_N - x_target| <= dmax
+            cons += [err <= self.dmax]
+            obj = fuel
         else:
             raise ValueError(mode)
         # ---------------- extensions used in Question 5 (hazards, trust region, approach cone, map)
@@ -309,5 +310,36 @@ def solve_min_fuel(prob, x0, m0=None, n_grid=25, tol=0.02, certify=True):
 def solve_min_landing_error(p, x0, m0=None, N=40, g=-10.0, n_grid=25, tol=0.02, certify=True, **kw):
     """Two-stage guidance of Blackmore et al. (2010) for targets that cannot be reached:
     stage 1 finds d* = min over tgo of the landing error; stage 2 minimizes the fuel with error <= d*."""
-    # TODO (Question 3.2): stage 1: LanderSOCP with mode='error' and the same search as solve_min_fuel (landing error instead of fuel); stage 2: LanderSOCP with mode='fuel_with_error_bound', dmax = d_star + 1 mm, solved at the best tgo; return (solution, d_star, sorted list of (tgo, error))
-    raise NotImplementedError("Question 3.2")
+    m0 = p.m_wet if m0 is None else m0
+
+    # ---- Stage 1: minimum landing error d* = min over tgo of |x_N - x_target|
+    prob1 = LanderSOCP(p, N=N, g=g, mode="error", **kw)
+    sols1 = {}
+
+    def error(tgo):
+        sol = prob1.solve(x0, tgo, m0)
+        if sol is None or (certify and not is_lossless(sol)):   # same certificate as solve_min_fuel
+            sols1[tgo] = None
+            return np.inf
+        sols1[tgo] = sol
+        return sol.landing_error
+
+    t_min, t_max = tgo_bounds(p, x0, m0)
+    grid = np.linspace(t_min, t_max, n_grid)
+    vals = np.array([error(t) for t in grid])
+    evals = sorted((t, e) for t, e in zip(grid, vals))
+    if not np.isfinite(vals).any():
+        return None, None, evals
+    i = int(np.argmin(vals))
+    golden_section(error, grid[max(i - 1, 0)], grid[min(i + 1, n_grid - 1)], tol=tol)
+    t_star, best1 = min(((t, s) for t, s in sols1.items() if s is not None), key=lambda ts: ts[1].landing_error)
+    d_star = best1.landing_error
+    evals = sorted((t, (s.landing_error if s is not None else np.inf)) for t, s in sols1.items())
+
+    # ---- Stage 2: minimum fuel at t_f* with |x_N - x_target| <= d* + 1 mm
+    prob2 = LanderSOCP(p, N=N, g=g, mode="fuel_with_error_bound", **kw)
+    prob2.dmax.value = d_star + 1e-3
+    sol = prob2.solve(x0, t_star, m0)
+    if sol is None or (certify and not is_lossless(sol)):   # safety: keep the certified stage-1 trajectory
+        sol = best1
+    return sol, d_star, evals
