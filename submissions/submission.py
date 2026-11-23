@@ -183,8 +183,8 @@ class HazardCascadePolicy(CascadeController):
         return base + self.gust.predict(t_nodes)
 
     def _use_staging(self, s):
-        return (self.y_stage is not None and s[1] > self.y_stage - 0.4
-                and (abs(s[0]) > 0.25 or abs(s[2]) > 0.35))
+        return (self.y_stage is not None and self.k < 250 and s[1] > self.y_stage - 0.5
+                and (abs(s[0]) > 0.40 or abs(s[2]) > 0.55))
 
     def _solve(self, s, tgo, certify=True, pbar=None, n_scp=None):
         """SCP solve for a fixed tgo (targeting staging gate above canyon if needed)."""
